@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run tests
+        shell: powershell
+        run: .\tests\Run-Tests.ps1
+
+      - name: Package
+        shell: powershell
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $name = "SearchDesktopShortcut-$version"
+          $stage = Join-Path $env:RUNNER_TEMP $name
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item Install.cmd, InstallLocalCopy.cmd, Uninstall.cmd, README.md, LICENSE -Destination $stage
+          Copy-Item scripts, src -Destination $stage -Recurse
+          Compress-Archive -Path $stage -DestinationPath "$name.zip"
+          $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$PWD\$name.zip.sha256", "$hash  $name.zip`n")
+          "ASSET_NAME=$name" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Publish
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = ".github\release-notes\$env:GITHUB_REF_NAME.md"
+          if (-not (Test-Path $notes)) { throw "Missing release notes: $notes" }
+          gh release create $env:GITHUB_REF_NAME "$env:ASSET_NAME.zip" "$env:ASSET_NAME.zip.sha256" --title $env:GITHUB_REF_NAME --notes-file $notes --verify-tag
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the release.' }
