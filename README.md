@@ -21,6 +21,7 @@
 ## Features
 
 - Adds **Create desktop shortcut** below **Open file location** in the Windows Search right-click menu.
+- Shows the menu item in your Windows display language. English and Turkish are included; other languages use English.
 - Works with desktop programs and Microsoft Store apps.
 - Creates real app shortcuts, so they keep the app's own icon.
 - Keeps Bing and web results in Windows Search enabled.

@@ -48,7 +48,13 @@ try {
     $source = Join-Path $work 'bundle.js'
     $patched = Join-Path $work 'patched.js'
     [IO.File]::WriteAllText($source, $bundle, [Text.Encoding]::ASCII)
+    $env:SEARCHDESKTOPSHORTCUT_LANGUAGE = 'tr'
+    Invoke-Project @('-Action', 'PatchFile', '-Source', $source, '-Out', (Join-Path $work 'patched-tr.js'))
+    $turkish = [IO.File]::ReadAllText((Join-Path $work 'patched-tr.js'))
+    if (-not $turkish.Contains('"Masa\u00fcst\u00fcne k\u0131sayol olu\u015ftur"')) { throw 'The Turkish menu label is missing.' }
+    $env:SEARCHDESKTOPSHORTCUT_LANGUAGE = 'en'
     Invoke-Project @('-Action', 'PatchFile', '-Source', $source, '-Out', $patched)
+    Remove-Item Env:\SEARCHDESKTOPSHORTCUT_LANGUAGE
     & node --check $patched
     if ($LASTEXITCODE -ne 0) { throw 'The patched bundle is not valid JavaScript.' }
     & node (Join-Path $PSScriptRoot 'patch.test.js') $source $patched

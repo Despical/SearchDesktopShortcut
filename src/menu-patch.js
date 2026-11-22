@@ -4,6 +4,7 @@
 // Template for the patched menu call. Comment lines are removed and the remaining
 // lines are trimmed and joined, so every statement must end with its own separator.
 // @NS@, @VERBS@, @X@ and @Y@ are the minified names found at the patch location.
+// @LABEL@ is the menu text for the Windows display language.
 this.innerShowContextMenu(/*DesktopShortcutPatch*/((dsV, dsS) => {
 try {
 let dsD = @NS@.getItemWithFileMetadata(dsS),
@@ -16,7 +17,7 @@ dsB = dsA >= 0 ? dsA + 1 : dsV.findIndex(dsX => dsX.verb && dsR.test(dsX.verb));
 dsV = dsV.slice();
 dsV.splice(dsB, 0, {
 verb: "CreateDesktopShortcut",
-displayName: "Create desktop shortcut",
+displayName: "@LABEL@",
 icon: {type: 1, content: "&#xE7F4"},
 executeSync: () => {
 @NS@.Host.launchUriAsync("desktopshortcut:" + dsH(String(dsD.displayName || dsS.text || "Shortcut")) + "-" + dsH(String(dsP)), !0);

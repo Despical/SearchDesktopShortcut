@@ -41,11 +41,24 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments) {
     }
 }
 
+# Menu labels as JavaScript string contents. Keep them ASCII by escaping other characters.
+$MenuLabels = @{
+    'en' = 'Create desktop shortcut'
+    'tr' = 'Masa\u00fcst\u00fcne k\u0131sayol olu\u015ftur'
+}
+
+function Get-MenuLabel {
+    $language = $env:SEARCHDESKTOPSHORTCUT_LANGUAGE
+    if (-not $language) { $language = (Get-UICulture).TwoLetterISOLanguageName }
+    if ($MenuLabels.ContainsKey($language)) { return $MenuLabels[$language] }
+    return $MenuLabels['en']
+}
+
 function Get-PatchTemplate {
     $lines = Get-Content -LiteralPath $PatchSource -Encoding UTF8 |
         ForEach-Object { $_.Trim() } |
         Where-Object { $_ -and -not $_.StartsWith('//') }
-    return ($lines -join '')
+    return ($lines -join '').Replace('@LABEL@', (Get-MenuLabel))
 }
 
 function Get-PatchedText([string]$Text) {
