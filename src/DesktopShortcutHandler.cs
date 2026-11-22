@@ -2,11 +2,13 @@
 // Licensed under the GNU General Public License v3.0 or later. See LICENSE.
 
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 [ComImport, Guid("00021401-0000-0000-C000-000000000046")]
 internal class ShellLink { }
@@ -53,6 +55,7 @@ internal static class Program {
 
     [STAThread]
     private static int Main(string[] args) {
+        if (args.Length == 1 && args[0] == "--watch") return Watch();
         if (args.Length != 1) return InvalidRequest;
         Match request = Request.Match(args[0]);
         if (!request.Success) return InvalidRequest;
@@ -62,6 +65,60 @@ internal static class Program {
         }
         catch (Exception) {
             return Failure;
+        }
+    }
+
+    // Windows Search downloads new interface files from Bing, for example after a restart.
+    // Watch its cache and run the installer's repatch step whenever a script changes.
+    private static int Watch() {
+        bool created;
+        using (Mutex single = new Mutex(true, "Local\\SearchDesktopShortcutWatcher", out created)) {
+            if (!created) return Success;
+
+            string cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                @"Packages\Microsoft.Windows.Search_cw5n1h2txyewy\AC");
+            string script = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"app\scripts\SearchDesktopShortcut.ps1");
+            object gate = new object();
+            Timer debounce = new Timer(_ => Repatch(script, gate), null, 2000, Timeout.Infinite);
+            Timer fallback = new Timer(_ => Repatch(script, gate), null, TimeSpan.FromMinutes(30), TimeSpan.FromMinutes(30));
+
+            while (!Directory.Exists(cache)) Thread.Sleep(TimeSpan.FromMinutes(1));
+            using (FileSystemWatcher watcher = new FileSystemWatcher(cache, "*.js")) {
+                watcher.IncludeSubdirectories = true;
+                watcher.InternalBufferSize = 64 * 1024;
+                watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.LastWrite;
+                FileSystemEventHandler changed = (sender, e) => debounce.Change(3000, Timeout.Infinite);
+                watcher.Created += changed;
+                watcher.Changed += changed;
+                watcher.Renamed += (sender, e) => debounce.Change(3000, Timeout.Infinite);
+                watcher.Error += (sender, e) => debounce.Change(3000, Timeout.Infinite);
+                watcher.EnableRaisingEvents = true;
+                Thread.Sleep(Timeout.Infinite);
+            }
+            GC.KeepAlive(fallback);
+        }
+        return Success;
+    }
+
+    private static void Repatch(string script, object gate) {
+        if (!Monitor.TryEnter(gate)) return;
+        try {
+            if (!File.Exists(script)) return;
+            string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            ProcessStartInfo info = new ProcessStartInfo(
+                Path.Combine(system, @"WindowsPowerShell\v1.0\powershell.exe"),
+                "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" -Action Repatch");
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            using (Process process = Process.Start(info)) {
+                process.WaitForExit(120000);
+            }
+        }
+        catch (Exception) {
+            // The fallback timer retries later.
+        }
+        finally {
+            Monitor.Exit(gate);
         }
     }
 

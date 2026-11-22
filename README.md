@@ -24,6 +24,7 @@
 - Works with desktop programs and Microsoft Store apps.
 - Creates real app shortcuts, so they keep the app's own icon.
 - Keeps Bing and web results in Windows Search enabled.
+- Reapplies itself when Bing sends a new version of the Search interface, for example after a restart.
 - Installs for the current user without administrator rights.
 - Backs up every file it changes and restores them on uninstall.
 
@@ -46,9 +47,11 @@ Windows may show a SmartScreen prompt for downloaded scripts. Review the files f
 
 ## Updating
 
-Microsoft delivers the Search interface through Bing and replaces it from time to time. If the menu item disappears, run `Install.cmd` again. Running it repeatedly is safe.
+Microsoft delivers the Search interface through Bing and replaces it often, including after a restart. A small background helper starts when you sign in, notices new Search files and patches them within a few seconds. The next time you open Search, the menu item is back.
 
-If Microsoft changes the menu code itself, the installer stops without changing the new files. In that case, please [open an issue](https://github.com/Despical/SearchDesktopShortcut/issues).
+To update SearchDesktopShortcut itself, extract the new release and run its `Install.cmd`. Running it repeatedly is safe.
+
+If Microsoft changes the menu code itself, the helper leaves the new files unchanged and writes the reason to `%LOCALAPPDATA%\SearchDesktopShortcut\watcher.log`. In that case, please [open an issue](https://github.com/Despical/SearchDesktopShortcut/issues).
 
 ## Using Search without web results
 
@@ -58,7 +61,7 @@ The script briefly takes write access to one file, then returns its original own
 
 ## Uninstalling
 
-Run `Uninstall.cmd`. It restores the original files, removes the protocol handler and deletes the data folder. If the local copy was patched, Windows asks for administrator approval. Shortcuts already on your desktop are kept.
+Run `Uninstall.cmd`. It stops the background helper, removes its sign-in entry, restores the original files, removes the protocol handler and deletes the data folder. If the local copy was patched, Windows asks for administrator approval. Shortcuts already on your desktop are kept.
 
 ## How it works
 
@@ -66,7 +69,9 @@ Run `Uninstall.cmd`. It restores the original files, removes the protocol handle
 | --- | --- | --- |
 | Menu patch | Windows Search web cache in your user profile | Adds the menu item. The file size stays the same, because Windows Search discards cached files whose size changes. |
 | Protocol handler | `HKCU\Software\Classes\desktopshortcut` | Lets Windows Search hand the selected app to the helper. |
-| Helper | `%LOCALAPPDATA%\SearchDesktopShortcut` | Compiled from [`src/DesktopShortcutHandler.cs`](src/DesktopShortcutHandler.cs) during installation. It creates the shortcut. |
+| Helper | `%LOCALAPPDATA%\SearchDesktopShortcut` | Compiled from [`src/DesktopShortcutHandler.cs`](src/DesktopShortcutHandler.cs) during installation. It creates the shortcut and watches the Search cache. |
+| Sign-in entry | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` | Starts the helper in watch mode when you sign in. |
+| Installed scripts | `%LOCALAPPDATA%\SearchDesktopShortcut\app` | A copy of the scripts the helper uses to patch new Search files. |
 | Backups | `%LOCALAPPDATA%\SearchDesktopShortcut` | Original copies used by the uninstaller. |
 
 To make room for the patch, the installer empties some internal diagnostic error texts in the cached file. This does not change normal Search behavior, but those errors will have empty messages in logs.

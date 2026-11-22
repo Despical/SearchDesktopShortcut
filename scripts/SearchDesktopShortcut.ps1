@@ -3,7 +3,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('Install', 'InstallSystem', 'Uninstall', 'RestoreSystem', 'Status', 'BuildHandler', 'PatchFile')]
+    [ValidateSet('Install', 'Repatch', 'InstallSystem', 'Uninstall', 'RestoreSystem', 'Status', 'BuildHandler', 'PatchFile')]
     [string]$Action = 'Install',
     [string]$Source,
     [string]$Out
@@ -17,6 +17,10 @@ $PatchSource  = Join-Path $ProjectRoot 'src\menu-patch.js'
 
 $DataRoot     = Join-Path $env:LOCALAPPDATA 'SearchDesktopShortcut'
 $HandlerExe   = Join-Path $DataRoot 'DesktopShortcutHandler.exe'
+$AppCopy      = Join-Path $DataRoot 'app'
+$WatchLog     = Join-Path $DataRoot 'watcher.log'
+$RunKey       = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$RunValue     = 'SearchDesktopShortcut'
 $CacheBackup  = Join-Path $DataRoot 'cache'
 $SystemBackup = Join-Path $DataRoot '11.js.orig'
 $SystemHash   = Join-Path $DataRoot '11.js.orig.sha256'
@@ -101,9 +105,25 @@ function Build-Handler([string]$Destination) {
     Invoke-Native $compiler @('/nologo', '/optimize+', '/target:winexe', "/out:$Destination", $HandlerSource)
 }
 
+function Stop-Watcher {
+    Get-Process DesktopShortcutHandler -ErrorAction SilentlyContinue | Stop-Process -Force
+}
+
+function Start-Watcher {
+    Start-Process -FilePath $HandlerExe -ArgumentList '--watch'
+}
+
 function Install-Handler {
     New-Item -ItemType Directory -Force $DataRoot | Out-Null
+    Stop-Watcher
+    $projectFull = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
+    if ($projectFull -ne [IO.Path]::GetFullPath($AppCopy).TrimEnd('\')) {
+        Remove-Item -LiteralPath $AppCopy -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force $AppCopy | Out-Null
+        Copy-Item -LiteralPath (Join-Path $ProjectRoot 'scripts'), (Join-Path $ProjectRoot 'src') -Destination $AppCopy -Recurse
+    }
     Build-Handler $HandlerExe
+    New-ItemProperty -Path $RunKey -Name $RunValue -Value ('"{0}" --watch' -f $HandlerExe) -PropertyType String -Force | Out-Null
     New-Item -Path "$ProtocolKey\shell\open\command" -Force | Out-Null
     Set-Item -Path $ProtocolKey -Value 'URL:Search Desktop Shortcut'
     New-ItemProperty -Path $ProtocolKey -Name 'URL Protocol' -Value '' -PropertyType String -Force | Out-Null
@@ -113,9 +133,22 @@ function Install-Handler {
     }
 }
 
-function Install-CachePatch {
+function Install-CachePatch([switch]$AllowNone) {
+    $lock = New-Object System.Threading.Mutex($false, 'Local\SearchDesktopShortcutPatch')
+    try {
+        try { [void]$lock.WaitOne(120000) } catch [System.Threading.AbandonedMutexException] { }
+        return Update-CacheFiles -AllowNone:$AllowNone
+    }
+    finally {
+        $lock.ReleaseMutex()
+        $lock.Dispose()
+    }
+}
+
+function Update-CacheFiles([switch]$AllowNone) {
     New-Item -ItemType Directory -Force $CacheBackup | Out-Null
     $count = 0
+    $changed = 0
     foreach ($file in Get-CacheScripts) {
         $text = $Latin1.GetString([IO.File]::ReadAllBytes($file.FullName))
         $saved = Join-Path $CacheBackup $file.Name
@@ -136,9 +169,19 @@ function Install-CachePatch {
         $stamp = $file.LastWriteTimeUtc
         [IO.File]::WriteAllBytes($file.FullName, $Latin1.GetBytes($patched))
         [IO.File]::SetLastWriteTimeUtc($file.FullName, $stamp)
+        $changed++
     }
-    if ($count -eq 0) { throw 'No Windows Search menu code was found. Open Windows Search once, then try again.' }
-    return $count
+    if ($count -eq 0 -and -not $AllowNone) {
+        throw 'No Windows Search menu code was found. Open Windows Search once, then try again.'
+    }
+    return [pscustomobject]@{ Count = $count; Changed = $changed }
+}
+
+function Write-WatchLog([string]$Message) {
+    if ((Test-Path -LiteralPath $WatchLog) -and (Get-Item -LiteralPath $WatchLog).Length -gt 64KB) {
+        Remove-Item -LiteralPath $WatchLog -Force
+    }
+    Add-Content -LiteralPath $WatchLog -Value ('{0:yyyy-MM-dd HH:mm:ss} {1}' -f (Get-Date), $Message) -Encoding ASCII
 }
 
 function Restore-CachePatch {
@@ -199,10 +242,25 @@ function Restore-SystemFile {
 switch ($Action) {
     'Install' {
         Install-Handler
-        $count = Install-CachePatch
+        $result = Install-CachePatch
         Stop-Search
-        Write-Host "Installed. Patched $count Windows Search file(s)." -ForegroundColor Green
+        Start-Watcher
+        Write-Host "Installed. Patched $($result.Count) Windows Search file(s)." -ForegroundColor Green
+        Write-Host 'New Search files from Bing are patched automatically after you sign in.'
         Write-Host 'Open Windows Search and right-click an app.'
+    }
+    'Repatch' {
+        try {
+            $result = Install-CachePatch -AllowNone
+            if ($result.Changed -gt 0) {
+                Stop-Search
+                Write-WatchLog "Patched $($result.Changed) new Windows Search file(s)."
+            }
+        }
+        catch {
+            Write-WatchLog "Repatch failed: $($_.Exception.Message)"
+            exit 1
+        }
     }
     'InstallSystem' {
         Assert-Administrator
@@ -229,6 +287,8 @@ switch ($Action) {
         Stop-Search
     }
     'Uninstall' {
+        Stop-Watcher
+        Remove-ItemProperty -Path $RunKey -Name $RunValue -ErrorAction SilentlyContinue
         Restore-CachePatch
         if (Test-SystemPatched) {
             if (Test-Administrator) {
@@ -241,7 +301,7 @@ switch ($Action) {
             }
         }
         Stop-Search
-        Get-Process DesktopShortcutHandler -ErrorAction SilentlyContinue | Stop-Process -Force
+        Stop-Watcher
         Remove-Item -Path $ProtocolKey -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $DataRoot -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host 'Uninstalled. Shortcuts already on your desktop were kept.' -ForegroundColor Green
@@ -252,6 +312,8 @@ switch ($Action) {
         }).Count
         Write-Host "Handler installed : $(Test-Path -LiteralPath $HandlerExe)"
         Write-Host "Protocol installed: $(Test-Path -Path $ProtocolKey)"
+        Write-Host "Starts at sign-in : $($null -ne (Get-ItemProperty -Path $RunKey -Name $RunValue -ErrorAction SilentlyContinue))"
+        Write-Host "Watcher running   : $($null -ne (Get-Process DesktopShortcutHandler -ErrorAction SilentlyContinue))"
         Write-Host "Patched web files : $patched"
         Write-Host "Local copy patched: $(Test-SystemPatched)"
     }
